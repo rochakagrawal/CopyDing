@@ -1,0 +1,78 @@
+<p align="center">
+  <img src="Assets/CopyDing-1024.png" width="160" alt="CopyDing icon">
+</p>
+
+# CopyDing
+
+CopyDing is a tiny native macOS menu-bar utility that plays the standard system alert sound when Command-C does not update the clipboard.
+
+It helps with applications, remote desktops, webpages, and other interfaces where a copy command can silently fail.
+
+## Features
+
+- Uses the familiar macOS system alert sound
+- Four adjustable alert timings for fast and slow applications
+- Remembers your timing selection
+- Pause and resume from the menu bar
+- Optional Launch at Login
+- No clipboard history, analytics, network access, or stored text
+- Universal app for Apple Silicon and Intel Macs
+
+## Install
+
+1. Download the latest `CopyDing.zip` from the repository's **Releases** page.
+2. Unzip it and move `CopyDing.app` into `/Applications`.
+3. Control-click the app and choose **Open** the first time.
+4. Allow CopyDing under **System Settings → Privacy & Security → Accessibility**.
+
+CopyDing needs Accessibility permission only to observe Command-C globally. It does not control the keyboard or mouse.
+
+## Use
+
+Copy normally with Command-C. If the clipboard has not changed after the selected delay, CopyDing plays the current macOS alert sound.
+
+Click the clipboard icon in the menu bar to:
+
+- Pause or resume alerts
+- Choose **Fast**, **Normal**, **Relaxed**, or **Slow apps** timing
+- Test the alert sound
+- Enable Launch at Login
+- Quit CopyDing
+
+## Privacy
+
+CopyDing checks only the clipboard's numeric change counter. It never reads, records, or transmits clipboard contents. See [PRIVACY.md](PRIVACY.md) for the exact behavior.
+
+## Build from source
+
+Requirements:
+
+- macOS 13 or later
+- Xcode Command Line Tools or Xcode
+
+Build the Swift package:
+
+```sh
+swift build
+```
+
+Create a universal, locally signed app and zip archive:
+
+```sh
+./scripts/build-release.sh
+```
+
+The release archive will appear in `dist/`.
+
+## Limitations
+
+- Apps that take longer than the selected delay to update the clipboard can cause a false alert. Choose a slower timing preset for those apps.
+- Public downloads are locally signed unless a maintainer supplies a Developer ID identity. macOS may therefore require the Control-click → **Open** step.
+
+## Contributing
+
+Bug reports and focused improvements are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
+
+## License
+
+CopyDing is available under the [MIT License](LICENSE).
