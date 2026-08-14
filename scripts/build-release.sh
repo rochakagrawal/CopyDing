@@ -13,18 +13,22 @@ trap 'rm -rf "${STAGE_DIR}"' EXIT
 rm -rf "${BUILD_DIR}" "${DIST_DIR}"
 mkdir -p "${CONTENTS_DIR}/MacOS" "${CONTENTS_DIR}/Resources"
 
-SWIFT_OPTIONS=()
 if [[ "${COPYDING_DISABLE_SWIFT_SANDBOX:-0}" == "1" ]]; then
-  SWIFT_OPTIONS+=(--disable-sandbox)
+  swift build \
+    --disable-sandbox \
+    --package-path "${PROJECT_DIR}" \
+    --scratch-path "${BUILD_DIR}" \
+    --configuration release \
+    --arch arm64 \
+    --arch x86_64
+else
+  swift build \
+    --package-path "${PROJECT_DIR}" \
+    --scratch-path "${BUILD_DIR}" \
+    --configuration release \
+    --arch arm64 \
+    --arch x86_64
 fi
-
-swift build \
-  "${SWIFT_OPTIONS[@]}" \
-  --package-path "${PROJECT_DIR}" \
-  --scratch-path "${BUILD_DIR}" \
-  --configuration release \
-  --arch arm64 \
-  --arch x86_64
 
 cp "${BUILD_DIR}/apple/Products/Release/CopyDing" "${CONTENTS_DIR}/MacOS/CopyDing"
 cp "${PROJECT_DIR}/Info.plist" "${CONTENTS_DIR}/Info.plist"
