@@ -48,4 +48,11 @@ final class CopyControlClassifierTests: XCTestCase {
             labels: ["Share"]
         ))
     }
+
+    func testSuccessSoundModesHaveExpectedTitles() {
+        XCTAssertEqual(
+            SuccessSoundMode.allCases.map(\.title),
+            ["Off", "⌘C only", "Any clipboard change"]
+        )
+    }
 }

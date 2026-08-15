@@ -8,6 +8,7 @@ CopyDing is deliberately small and local-only.
 - Left-button-down notifications when mouse-copy failure detection is enabled
 - The role and label of the accessibility element directly under a click, solely to recognise Copy controls
 - The clipboard's numeric `changeCount`, before and after detected Copy actions
+- The same numeric counter four times per second when **Any clipboard change** is selected
 - Whether macOS has granted the app Accessibility permission
 
 ## What it does not do
@@ -20,4 +21,4 @@ CopyDing is deliberately small and local-only.
 - It does not access the network.
 - It does not include analytics, advertising, crash reporting, or telemetry.
 
-The saved preferences are the selected alert delay and whether mouse-copy failure detection is enabled. Both are stored locally through macOS `UserDefaults`.
+The saved preferences are the selected alert delay, mouse-copy failure detection setting, and success-sound mode. They are stored locally through macOS `UserDefaults`.

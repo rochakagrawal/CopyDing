@@ -6,6 +6,7 @@
 - Detects standard Copy menu items and properly labelled Copy buttons
 - Monitors left-button presses only when the option is enabled
 - Does not monitor mouse movement or modify mouse events
+- Added success-sound modes for Off, ⌘C only, and Any clipboard change
 
 ## 1.1.0
 
