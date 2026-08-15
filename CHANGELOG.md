@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.0
+
+- Added an optional failure alert for mouse-based Copy actions
+- Detects standard Copy menu items and properly labelled Copy buttons
+- Monitors left-button presses only when the option is enabled
+- Does not monitor mouse movement or modify mouse events
+
 ## 1.1.0
 
 - Added Fast, Normal, Relaxed, and Slow Apps timing presets

@@ -6,7 +6,7 @@ Thanks for helping improve CopyDing.
 
 1. Keep the app lightweight and native to macOS.
 2. Do not add clipboard-content collection, telemetry, or network access.
-3. Build the project with `swift build`.
+3. Run the test suite with `swift test`.
 4. Test both successful and unsuccessful copy attempts.
 5. Explain any new Accessibility permission usage clearly.
 
