@@ -2,16 +2,68 @@ import AppKit
 import ApplicationServices
 import ServiceManagement
 
+enum CopyControlClassifier {
+    static func isCopyControl(role: String, commandCharacter: String?, labels: [String]) -> Bool {
+        guard role == "AXMenuItem" || role == "AXButton" else { return false }
+
+        if role == "AXMenuItem", commandCharacter?.lowercased() == "c" {
+            return true
+        }
+
+        return labels.contains(where: containsCopyLabel)
+    }
+
+    static func containsCopyLabel(_ value: String) -> Bool {
+        value.range(
+            of: #"(?i)(^|[^a-z])copy([^a-z]|$)|copybutton|copytoclipboard"#,
+            options: .regularExpression
+        ) != nil
+    }
+}
+
+enum SuccessSoundMode: String, CaseIterable {
+    case off
+    case commandCOnly
+    case anyClipboardChange
+
+    var title: String {
+        switch self {
+        case .off: "Off"
+        case .commandCOnly: "⌘C only"
+        case .anyClipboardChange: "Any clipboard change"
+        }
+    }
+}
+
+enum CopyAttemptSource: Equatable {
+    case keyboard
+    case mouse
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let pasteboard = NSPasteboard.general
     private var statusItem: NSStatusItem!
     private var globalMonitor: Any?
     private var localMonitor: Any?
+    private var mouseMonitor: Any?
     private var permissionTimer: Timer?
+    private var clipboardTimer: Timer?
     private var lastAccessibilityState = false
+    private var lastObservedClipboardChangeCount = 0
     private var pendingCheck: DispatchWorkItem?
     private var enabled = true
+    private var mouseFailureDetectionEnabled = UserDefaults.standard.bool(
+        forKey: "mouseFailureDetectionEnabled"
+    )
+    private var successSoundMode = SuccessSoundMode(
+        rawValue: UserDefaults.standard.string(forKey: "successSoundMode") ?? ""
+    ) ?? .off
+    private lazy var successSound: NSSound? = {
+        let sound = NSSound(named: NSSound.Name("Glass"))
+        sound?.volume = 0.55
+        return sound
+    }()
     private var copyDelay: TimeInterval = {
         let saved = UserDefaults.standard.double(forKey: "copyDelay")
         return saved > 0 ? saved : 0.45
@@ -30,8 +82,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     )
 
     private lazy var permissionItem = NSMenuItem(
-        title: "Keyboard access: Checking…",
+        title: "Accessibility access: Checking…",
         action: #selector(openAccessibilitySettings),
+        keyEquivalent: ""
+    )
+
+    private lazy var mouseFailureItem = NSMenuItem(
+        title: "Alert for Mouse Copy Failures",
+        action: #selector(toggleMouseFailureDetection),
         keyEquivalent: ""
     )
 
@@ -44,8 +102,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         buildMenu()
+        lastObservedClipboardChangeCount = pasteboard.changeCount
         lastAccessibilityState = AXIsProcessTrusted()
         startMonitoring()
+        startClipboardMonitoring()
         startPermissionPolling()
         updateMenuState()
         requestAccessibilityIfNeeded()
@@ -54,7 +114,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         if let globalMonitor { NSEvent.removeMonitor(globalMonitor) }
         if let localMonitor { NSEvent.removeMonitor(localMonitor) }
+        if let mouseMonitor { NSEvent.removeMonitor(mouseMonitor) }
         permissionTimer?.invalidate()
+        clipboardTimer?.invalidate()
     }
 
     private func buildMenu() {
@@ -68,11 +130,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         enabledItem.target = self
+        mouseFailureItem.target = self
         permissionItem.target = self
         loginItem.target = self
 
         let menu = NSMenu()
         menu.addItem(enabledItem)
+        mouseFailureItem.toolTip = "Detects standard Copy menu items and labelled Copy buttons"
+        menu.addItem(mouseFailureItem)
 
         let sensitivityItem = NSMenuItem(title: "Alert Timing", action: nil, keyEquivalent: "")
         let sensitivityMenu = NSMenu(title: "Alert Timing")
@@ -88,6 +153,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         sensitivityItem.submenu = sensitivityMenu
         menu.addItem(sensitivityItem)
+
+        let successSoundItem = NSMenuItem(title: "Success Sound", action: nil, keyEquivalent: "")
+        let successSoundMenu = NSMenu(title: "Success Sound")
+        for mode in SuccessSoundMode.allCases {
+            let item = NSMenuItem(
+                title: mode.title,
+                action: #selector(selectSuccessSoundMode(_:)),
+                keyEquivalent: ""
+            )
+            item.target = self
+            item.representedObject = mode.rawValue
+            successSoundMenu.addItem(item)
+        }
+        successSoundItem.submenu = successSoundMenu
+        menu.addItem(successSoundItem)
         menu.addItem(.separator())
 
         permissionItem.toolTip = "Click to open Accessibility settings"
@@ -116,14 +196,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func startMonitoring() {
         if let globalMonitor { NSEvent.removeMonitor(globalMonitor) }
         if let localMonitor { NSEvent.removeMonitor(localMonitor) }
+        if let mouseMonitor { NSEvent.removeMonitor(mouseMonitor) }
 
         globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            Task { @MainActor in self?.handle(event) }
+            Task { @MainActor in self?.handleKeyDown(event) }
         }
 
         localMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            self?.handle(event)
+            self?.handleKeyDown(event)
             return event
+        }
+
+        if mouseFailureDetectionEnabled {
+            mouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+                Task { @MainActor in self?.handleMouseDown(event) }
+            }
+        } else {
+            mouseMonitor = nil
         }
     }
 
@@ -141,25 +230,128 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func handle(_ event: NSEvent) {
+    private func startClipboardMonitoring() {
+        clipboardTimer?.invalidate()
+        clipboardTimer = nil
+        lastObservedClipboardChangeCount = pasteboard.changeCount
+
+        guard successSoundMode == .anyClipboardChange else { return }
+
+        let timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.checkForAnyClipboardChange() }
+        }
+        timer.tolerance = 0.1
+        clipboardTimer = timer
+    }
+
+    private func checkForAnyClipboardChange() {
+        let currentChangeCount = pasteboard.changeCount
+        guard currentChangeCount != lastObservedClipboardChangeCount else { return }
+
+        lastObservedClipboardChangeCount = currentChangeCount
+        if enabled {
+            playSuccessSound()
+        }
+    }
+
+    private func handleKeyDown(_ event: NSEvent) {
         guard enabled, !event.isARepeat, event.keyCode == 8 else { return }
 
         let relevant = event.modifierFlags.intersection([.command, .shift, .control, .option])
         guard relevant == .command else { return }
 
+        scheduleFailureCheck(startingAt: pasteboard.changeCount, source: .keyboard)
+    }
+
+    private func handleMouseDown(_ event: NSEvent) {
+        guard enabled, mouseFailureDetectionEnabled, let mouseEvent = event.cgEvent else { return }
+
         let oldChangeCount = pasteboard.changeCount
+        guard isCopyControl(at: mouseEvent.location) else { return }
+
+        scheduleFailureCheck(startingAt: oldChangeCount, source: .mouse)
+    }
+
+    private func scheduleFailureCheck(startingAt oldChangeCount: Int, source: CopyAttemptSource) {
         pendingCheck?.cancel()
 
         let check = DispatchWorkItem { [weak self] in
             guard let self, self.enabled else { return }
-            if self.pasteboard.changeCount == oldChangeCount {
+            let copySucceeded = self.pasteboard.changeCount != oldChangeCount
+            if !copySucceeded {
                 NSSound.beep()
+            } else if self.successSoundMode == .commandCOnly, source == .keyboard {
+                self.playSuccessSound()
             }
         }
         pendingCheck = check
 
         // A short grace period avoids false alerts from apps that update the clipboard asynchronously.
         DispatchQueue.main.asyncAfter(deadline: .now() + copyDelay, execute: check)
+    }
+
+    private func playSuccessSound() {
+        successSound?.stop()
+        successSound?.currentTime = 0
+        successSound?.play()
+    }
+
+    private func isCopyControl(at point: CGPoint) -> Bool {
+        let systemWideElement = AXUIElementCreateSystemWide()
+        AXUIElementSetMessagingTimeout(systemWideElement, 0.1)
+
+        var hitElement: AXUIElement?
+        let result = AXUIElementCopyElementAtPosition(
+            systemWideElement,
+            Float(point.x),
+            Float(point.y),
+            &hitElement
+        )
+        guard result == .success, var currentElement = hitElement else { return false }
+
+        // Some apps expose an image or text child inside the actual button.
+        // Check a few ancestors so properly labelled parent controls are still detected.
+        for _ in 0..<4 {
+            if accessibilityElementLooksLikeCopyControl(currentElement) {
+                return true
+            }
+            guard let parent = accessibilityElementAttribute("AXParent", of: currentElement) else {
+                break
+            }
+            currentElement = parent
+        }
+        return false
+    }
+
+    private func accessibilityElementLooksLikeCopyControl(_ element: AXUIElement) -> Bool {
+        let role = accessibilityStringAttribute("AXRole", of: element) ?? ""
+        let searchableAttributes = ["AXTitle", "AXDescription", "AXHelp", "AXIdentifier", "AXValue"]
+        let labels = searchableAttributes.compactMap {
+            accessibilityStringAttribute($0, of: element)
+        }
+        return CopyControlClassifier.isCopyControl(
+            role: role,
+            commandCharacter: accessibilityStringAttribute("AXMenuItemCmdChar", of: element),
+            labels: labels
+        )
+    }
+
+    private func accessibilityStringAttribute(_ name: String, of element: AXUIElement) -> String? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success else {
+            return nil
+        }
+        return value as? String
+    }
+
+    private func accessibilityElementAttribute(_ name: String, of element: AXUIElement) -> AXUIElement? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success,
+              let value,
+              CFGetTypeID(value) == AXUIElementGetTypeID() else {
+            return nil
+        }
+        return unsafeDowncast(value, to: AXUIElement.self)
     }
 
     private func requestAccessibilityIfNeeded() {
@@ -175,15 +367,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func updateMenuState() {
         enabledItem.state = enabled ? .on : .off
+        mouseFailureItem.state = mouseFailureDetectionEnabled ? .on : .off
         if let items = statusItem.menu?.item(withTitle: "Alert Timing")?.submenu?.items {
             for item in items {
                 guard let value = (item.representedObject as? NSNumber)?.doubleValue else { continue }
                 item.state = abs(value - copyDelay) < 0.001 ? .on : .off
             }
         }
+        if let items = statusItem.menu?.item(withTitle: "Success Sound")?.submenu?.items {
+            for item in items {
+                let rawValue = item.representedObject as? String
+                item.state = rawValue == successSoundMode.rawValue ? .on : .off
+            }
+        }
         permissionItem.title = AXIsProcessTrusted()
-            ? "Keyboard access: Allowed"
-            : "Keyboard access: Required…"
+            ? "Accessibility access: Allowed"
+            : "Accessibility access: Required…"
 
         if #available(macOS 13.0, *) {
             loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
@@ -198,10 +397,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updateMenuState()
     }
 
+    @objc private func toggleMouseFailureDetection() {
+        mouseFailureDetectionEnabled.toggle()
+        UserDefaults.standard.set(mouseFailureDetectionEnabled, forKey: "mouseFailureDetectionEnabled")
+        pendingCheck?.cancel()
+        startMonitoring()
+        updateMenuState()
+    }
+
     @objc private func selectDelay(_ sender: NSMenuItem) {
         guard let value = (sender.representedObject as? NSNumber)?.doubleValue else { return }
         copyDelay = value
         UserDefaults.standard.set(value, forKey: "copyDelay")
+        updateMenuState()
+    }
+
+    @objc private func selectSuccessSoundMode(_ sender: NSMenuItem) {
+        guard let rawValue = sender.representedObject as? String,
+              let mode = SuccessSoundMode(rawValue: rawValue) else {
+            return
+        }
+        successSoundMode = mode
+        UserDefaults.standard.set(mode.rawValue, forKey: "successSoundMode")
+        startClipboardMonitoring()
         updateMenuState()
     }
 

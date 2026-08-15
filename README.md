@@ -4,7 +4,7 @@
 
 # CopyDing
 
-CopyDing is a tiny native macOS menu-bar utility that plays the standard system alert sound when Command-C does not update the clipboard.
+CopyDing is a tiny native macOS menu-bar utility that plays the standard system alert sound when a detected Copy command does not update the clipboard.
 
 It helps with applications, remote desktops, webpages, and other interfaces where a copy command can silently fail.
 
@@ -12,6 +12,8 @@ It helps with applications, remote desktops, webpages, and other interfaces wher
 
 - Uses the familiar macOS system alert sound
 - Four adjustable alert timings for fast and slow applications
+- Optional mouse-copy failure detection for standard menu items and labelled buttons
+- Optional success sound for ⌘C or every clipboard change
 - Remembers your timing selection
 - Pause and resume from the menu bar
 - Optional Launch at Login
@@ -25,15 +27,25 @@ It helps with applications, remote desktops, webpages, and other interfaces wher
 3. Control-click the app and choose **Open** the first time.
 4. Allow CopyDing under **System Settings → Privacy & Security → Accessibility**.
 
-CopyDing needs Accessibility permission only to observe Command-C globally. It does not control the keyboard or mouse.
+CopyDing needs Accessibility permission to observe Command-C and, when enabled, identify clicked Copy controls. It never controls the keyboard, mouse, or cursor.
 
 ## Use
 
 Copy normally with Command-C. If the clipboard has not changed after the selected delay, CopyDing plays the current macOS alert sound.
 
+To cover mouse-based Copy actions, enable **Alert for Mouse Copy Failures**. This option observes left-button presses only. It recognises standard Copy menu items and properly labelled Copy buttons.
+
+The **Success Sound** submenu offers:
+
+- **Off**: no confirmation sound
+- **⌘C only**: confirms successful keyboard copies
+- **Any clipboard change**: confirms every clipboard update, including mouse Copy buttons, Cut, screenshot tools, password managers, and Universal Clipboard
+
 Click the clipboard icon in the menu bar to:
 
 - Pause or resume alerts
+- Enable or disable mouse-copy failure detection
+- Select when the success sound plays
 - Choose **Fast**, **Normal**, **Relaxed**, or **Slow apps** timing
 - Test the alert sound
 - Enable Launch at Login
@@ -67,6 +79,8 @@ The release archive will appear in `dist/`.
 ## Limitations
 
 - Apps that take longer than the selected delay to update the clipboard can cause a false alert. Choose a slower timing preset for those apps.
+- Mouse detection depends on the accessibility labels supplied by each app. Unlabelled icons and custom controls may not be recognised.
+- **Any clipboard change** can also sound for clipboard updates that were not initiated by a Copy command.
 - Public downloads are locally signed unless a maintainer supplies a Developer ID identity. macOS may therefore require the Control-click → **Open** step.
 
 ## Contributing

@@ -8,6 +8,11 @@ let package = Package(
         .executableTarget(
             name: "CopyDing",
             path: "Sources/CopyDing"
+        ),
+        .testTarget(
+            name: "CopyDingTests",
+            dependencies: ["CopyDing"],
+            path: "Tests/CopyDingTests"
         )
     ]
 )
