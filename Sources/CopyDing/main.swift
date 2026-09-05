@@ -52,10 +52,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var lastAccessibilityState = false
     private var lastObservedClipboardChangeCount = 0
     private var pendingCheck: DispatchWorkItem?
+    private var visualAlertDismissWorkItem: DispatchWorkItem?
+    private var visualAlertPanel: NSPanel?
     private var enabled = true
     private var mouseFailureDetectionEnabled = UserDefaults.standard.bool(
         forKey: "mouseFailureDetectionEnabled"
     )
+    private var visualFailureAlertEnabled: Bool = {
+        if let saved = UserDefaults.standard.object(forKey: "visualFailureAlertEnabled") as? Bool {
+            return saved
+        }
+        return true
+    }()
     private var successSoundMode = SuccessSoundMode(
         rawValue: UserDefaults.standard.string(forKey: "successSoundMode") ?? ""
     ) ?? .off
@@ -81,15 +89,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         keyEquivalent: ""
     )
 
-    private lazy var permissionItem = NSMenuItem(
-        title: "Accessibility access: Checking…",
-        action: #selector(openAccessibilitySettings),
-        keyEquivalent: ""
-    )
-
     private lazy var mouseFailureItem = NSMenuItem(
         title: "Alert for Mouse Copy Failures",
         action: #selector(toggleMouseFailureDetection),
+        keyEquivalent: ""
+    )
+
+    private lazy var visualFailureItem = NSMenuItem(
+        title: "Visual Failure Alert",
+        action: #selector(toggleVisualFailureAlert),
+        keyEquivalent: ""
+    )
+
+    private lazy var permissionItem = NSMenuItem(
+        title: "Accessibility access: Checking…",
+        action: #selector(openAccessibilitySettings),
         keyEquivalent: ""
     )
 
@@ -117,6 +131,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let mouseMonitor { NSEvent.removeMonitor(mouseMonitor) }
         permissionTimer?.invalidate()
         clipboardTimer?.invalidate()
+        visualAlertDismissWorkItem?.cancel()
+        visualAlertPanel?.orderOut(nil)
     }
 
     private func buildMenu() {
@@ -131,6 +147,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         enabledItem.target = self
         mouseFailureItem.target = self
+        visualFailureItem.target = self
         permissionItem.target = self
         loginItem.target = self
 
@@ -138,6 +155,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(enabledItem)
         mouseFailureItem.toolTip = "Detects standard Copy menu items and labelled Copy buttons"
         menu.addItem(mouseFailureItem)
+        visualFailureItem.toolTip = "Shows a small Copy failed alert beside the pointer"
+        menu.addItem(visualFailureItem)
 
         let sensitivityItem = NSMenuItem(title: "Alert Timing", action: nil, keyEquivalent: "")
         let sensitivityMenu = NSMenu(title: "Alert Timing")
@@ -182,6 +201,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         testItem.target = self
         menu.addItem(testItem)
+
+        let aboutItem = NSMenuItem(
+            title: "About CopyDing",
+            action: #selector(showAbout),
+            keyEquivalent: ""
+        )
+        aboutItem.target = self
+        menu.addItem(aboutItem)
 
         menu.addItem(.separator())
         let quitItem = NSMenuItem(
@@ -280,6 +307,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let copySucceeded = self.pasteboard.changeCount != oldChangeCount
             if !copySucceeded {
                 NSSound.beep()
+                if self.visualFailureAlertEnabled {
+                    self.showVisualFailureAlert()
+                }
             } else if self.successSoundMode == .commandCOnly, source == .keyboard {
                 self.playSuccessSound()
             }
@@ -294,6 +324,79 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         successSound?.stop()
         successSound?.currentTime = 0
         successSound?.play()
+    }
+
+    private func showVisualFailureAlert() {
+        visualAlertDismissWorkItem?.cancel()
+        visualAlertPanel?.orderOut(nil)
+
+        let label = NSTextField(labelWithString: "Copy failed")
+        label.font = .systemFont(ofSize: 13, weight: .semibold)
+        label.textColor = .white
+        label.alignment = .center
+        label.translatesAutoresizingMaskIntoConstraints = false
+
+        let container = NSView()
+        container.wantsLayer = true
+        container.layer?.backgroundColor = NSColor.systemRed.withAlphaComponent(0.92).cgColor
+        container.layer?.cornerRadius = 9
+        container.layer?.masksToBounds = true
+        container.addSubview(label)
+
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 12),
+            label.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -12),
+            label.topAnchor.constraint(equalTo: container.topAnchor, constant: 7),
+            label.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -7)
+        ])
+
+        let panelSize = NSSize(width: 94, height: 32)
+        let panel = NSPanel(
+            contentRect: NSRect(origin: .zero, size: panelSize),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.contentView = container
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.level = .statusBar
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
+        panel.ignoresMouseEvents = true
+        panel.hidesOnDeactivate = false
+        panel.alphaValue = 0
+
+        let pointer = NSEvent.mouseLocation
+        var origin = NSPoint(x: pointer.x + 14, y: pointer.y - panelSize.height - 10)
+        let targetScreen = NSScreen.screens.first(where: { NSMouseInRect(pointer, $0.frame, false) }) ?? NSScreen.main
+        if let visibleFrame = targetScreen?.visibleFrame {
+            origin.x = min(max(origin.x, visibleFrame.minX + 6), visibleFrame.maxX - panelSize.width - 6)
+            origin.y = min(max(origin.y, visibleFrame.minY + 6), visibleFrame.maxY - panelSize.height - 6)
+        }
+        panel.setFrameOrigin(origin)
+        panel.orderFrontRegardless()
+        visualAlertPanel = panel
+
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.08
+            panel.animator().alphaValue = 1
+        }
+
+        let dismiss = DispatchWorkItem { [weak self, weak panel] in
+            guard let self, let panel else { return }
+            NSAnimationContext.runAnimationGroup({ context in
+                context.duration = 0.18
+                panel.animator().alphaValue = 0
+            }, completionHandler: {
+                panel.orderOut(nil)
+                if self.visualAlertPanel === panel {
+                    self.visualAlertPanel = nil
+                }
+            })
+        }
+        visualAlertDismissWorkItem = dismiss
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.15, execute: dismiss)
     }
 
     private func isCopyControl(at point: CGPoint) -> Bool {
@@ -368,6 +471,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func updateMenuState() {
         enabledItem.state = enabled ? .on : .off
         mouseFailureItem.state = mouseFailureDetectionEnabled ? .on : .off
+        visualFailureItem.state = visualFailureAlertEnabled ? .on : .off
         if let items = statusItem.menu?.item(withTitle: "Alert Timing")?.submenu?.items {
             for item in items {
                 guard let value = (item.representedObject as? NSNumber)?.doubleValue else { continue }
@@ -405,6 +509,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updateMenuState()
     }
 
+    @objc private func toggleVisualFailureAlert() {
+        visualFailureAlertEnabled.toggle()
+        UserDefaults.standard.set(visualFailureAlertEnabled, forKey: "visualFailureAlertEnabled")
+        if !visualFailureAlertEnabled {
+            visualAlertDismissWorkItem?.cancel()
+            visualAlertPanel?.orderOut(nil)
+            visualAlertPanel = nil
+        }
+        updateMenuState()
+    }
+
     @objc private func selectDelay(_ sender: NSMenuItem) {
         guard let value = (sender.representedObject as? NSNumber)?.doubleValue else { return }
         copyDelay = value
@@ -425,6 +540,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func testDing() {
         NSSound.beep()
+    }
+
+    @objc private func showAbout() {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unknown"
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "Unknown"
+
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "CopyDing"
+        alert.informativeText = "Version \(version) (\(build))\nDeveloped by Rochak Agrawal"
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 
     @objc private func openAccessibilitySettings() {
