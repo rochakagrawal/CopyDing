@@ -44,9 +44,17 @@ jobs:
             exit 1
           fi
 
+          TEAM_ID="$(printf '%s' "${SIGNING_IDENTITY}" | sed -n 's/.*(\([A-Z0-9][A-Z0-9]*\))$/\1/p')"
+          if [[ -z "${TEAM_ID}" ]]; then
+            echo "Could not derive Apple Team ID from signing identity: ${SIGNING_IDENTITY}"
+            exit 1
+          fi
+
           echo "CODESIGN_IDENTITY=${SIGNING_IDENTITY}" >> "$GITHUB_ENV"
+          echo "APPLE_TEAM_ID=${TEAM_ID}" >> "$GITHUB_ENV"
           echo "COPYDING_KEYCHAIN_PATH=${KEYCHAIN_PATH}" >> "$GITHUB_ENV"
           echo "Using signing identity: ${SIGNING_IDENTITY}"
+          echo "Derived Apple Team ID: ${TEAM_ID}"
 
       - name: Build and Developer ID sign universal release
         run: ./scripts/build-release.sh
@@ -59,7 +67,6 @@ jobs:
       - name: Submit to Apple notarization service
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
         run: |
           set -euo pipefail
