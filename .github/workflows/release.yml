@@ -13,8 +13,83 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
-      - name: Build universal release
+
+      - name: Import Developer ID certificate
+        env:
+          APPLICATION_CERTIFICATE_BASE64: ${{ secrets.APPLICATION_CERTIFICATE_BASE64 }}
+          APPLICATION_P12_PASSWORD: ${{ secrets.APPLICATION_P12_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${APPLICATION_CERTIFICATE_BASE64}" || -z "${APPLICATION_P12_PASSWORD}" ]]; then
+            echo "Developer ID certificate secrets are missing."
+            exit 1
+          fi
+
+          CERTIFICATE_PATH="$RUNNER_TEMP/copyding-developer-id.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/copyding-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+
+          echo "${APPLICATION_CERTIFICATE_BASE64}" | base64 --decode > "${CERTIFICATE_PATH}"
+          security create-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+          security set-keychain-settings -lut 21600 "${KEYCHAIN_PATH}"
+          security unlock-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+          security import "${CERTIFICATE_PATH}" -P "${APPLICATION_P12_PASSWORD}" -A -t cert -f pkcs12 -k "${KEYCHAIN_PATH}"
+          security list-keychain -d user -s "${KEYCHAIN_PATH}" login.keychain-db
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+
+          SIGNING_IDENTITY="$(security find-identity -v -p codesigning "${KEYCHAIN_PATH}" | sed -n 's/.*"\(Developer ID Application:.*\)"/\1/p' | head -1)"
+          if [[ -z "${SIGNING_IDENTITY}" ]]; then
+            echo "Developer ID Application identity not found after certificate import."
+            security find-identity -v -p codesigning "${KEYCHAIN_PATH}" || true
+            exit 1
+          fi
+
+          echo "CODESIGN_IDENTITY=${SIGNING_IDENTITY}" >> "$GITHUB_ENV"
+          echo "COPYDING_KEYCHAIN_PATH=${KEYCHAIN_PATH}" >> "$GITHUB_ENV"
+          echo "Using signing identity: ${SIGNING_IDENTITY}"
+
+      - name: Build and Developer ID sign universal release
         run: ./scripts/build-release.sh
+
+      - name: Verify Developer ID signature
+        run: |
+          codesign --verify --deep --strict --verbose=2 dist/CopyDing.app
+          codesign -dv --verbose=4 dist/CopyDing.app 2>&1 | grep -E "Authority=Developer ID Application|Runtime Version|Timestamp" || true
+
+      - name: Submit to Apple notarization service
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${APPLE_ID}" || -z "${APPLE_TEAM_ID}" || -z "${APPLE_APP_SPECIFIC_PASSWORD}" ]]; then
+            echo "Apple notarization secrets are missing."
+            exit 1
+          fi
+          ARCHIVE="$(find dist -maxdepth 1 -name 'CopyDing-v*.zip' -print -quit)"
+          xcrun notarytool submit "${ARCHIVE}" \
+            --apple-id "${APPLE_ID}" \
+            --team-id "${APPLE_TEAM_ID}" \
+            --password "${APPLE_APP_SPECIFIC_PASSWORD}" \
+            --wait
+
+      - name: Staple notarization ticket and validate
+        run: |
+          set -euo pipefail
+          xcrun stapler staple dist/CopyDing.app
+          xcrun stapler validate dist/CopyDing.app
+          spctl --assess --type execute --verbose=4 dist/CopyDing.app
+
+      - name: Repackage stapled app
+        run: |
+          set -euo pipefail
+          VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Info.plist)"
+          ARCHIVE="dist/CopyDing-v${VERSION}.zip"
+          rm -f "${ARCHIVE}"
+          ditto -c -k --keepParent dist/CopyDing.app "${ARCHIVE}"
+          echo "Final notarized archive: ${ARCHIVE}"
+
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
