@@ -44,9 +44,10 @@ jobs:
             exit 1
           fi
 
-          TEAM_ID="$(printf '%s\n' "${SIGNING_IDENTITY}" | sed -n 's/.*(\([^()]\+\))$/\1/p')"
+          TEAM_ID="$(security find-certificate -c "Developer ID Application" -p "${KEYCHAIN_PATH}" | openssl x509 -noout -subject -nameopt RFC2253 | sed -n 's/.*OU=\([^,]*\).*/\1/p' | head -1)"
           if [[ -z "${TEAM_ID}" ]]; then
-            echo "Could not derive Apple Team ID from signing identity."
+            echo "Could not derive Apple Team ID from Developer ID certificate OU field."
+            security find-certificate -c "Developer ID Application" -p "${KEYCHAIN_PATH}" | openssl x509 -noout -subject -nameopt RFC2253 || true
             exit 1
           fi
 
@@ -54,7 +55,7 @@ jobs:
           echo "APPLE_TEAM_ID=${TEAM_ID}" >> "$GITHUB_ENV"
           echo "COPYDING_KEYCHAIN_PATH=${KEYCHAIN_PATH}" >> "$GITHUB_ENV"
           echo "Using signing identity: ${SIGNING_IDENTITY}"
-          echo "Derived Apple Team ID: ${TEAM_ID}"
+          echo "Derived Apple Team ID from certificate."
 
       - name: Build and Developer ID sign universal release
         run: ./scripts/build-release.sh
