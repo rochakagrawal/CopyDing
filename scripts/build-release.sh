@@ -5,10 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BUILD_DIR="${PROJECT_DIR}/.build-release"
 DIST_DIR="${PROJECT_DIR}/dist"
-STAGE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/copyding-release.XXXXXX")"
-APP_DIR="${STAGE_DIR}/CopyDing.app"
+APP_DIR="${DIST_DIR}/CopyDing.app"
 CONTENTS_DIR="${APP_DIR}/Contents"
-trap 'rm -rf "${STAGE_DIR}"' EXIT
 
 rm -rf "${BUILD_DIR}" "${DIST_DIR}"
 mkdir -p "${CONTENTS_DIR}/MacOS" "${CONTENTS_DIR}/Resources"
@@ -37,7 +35,19 @@ chmod 755 "${CONTENTS_DIR}/MacOS/CopyDing"
 xattr -cr "${APP_DIR}"
 
 CODESIGN_IDENTITY="${CODESIGN_IDENTITY:--}"
-codesign --force --deep --sign "${CODESIGN_IDENTITY}" --identifier com.copyding.utility "${APP_DIR}"
+if [[ "${CODESIGN_IDENTITY}" == "-" ]]; then
+  codesign --force --deep --sign - --identifier com.copyding.utility "${APP_DIR}"
+else
+  codesign \
+    --force \
+    --deep \
+    --options runtime \
+    --timestamp \
+    --sign "${CODESIGN_IDENTITY}" \
+    --identifier com.copyding.utility \
+    "${APP_DIR}"
+fi
+
 codesign --verify --deep --strict --verbose=2 "${APP_DIR}"
 
 VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "${PROJECT_DIR}/Info.plist")"
