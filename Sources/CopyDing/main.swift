@@ -544,12 +544,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func showAbout() {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unknown"
-        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "Unknown"
 
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.messageText = "CopyDing"
-        alert.informativeText = "Version \(version) (\(build))\nDeveloped by Rochak Agrawal"
+        alert.informativeText = "Version \(version)\nDeveloped by Rochak Agrawal"
         alert.alertStyle = .informational
         alert.addButton(withTitle: "OK")
         alert.runModal()
