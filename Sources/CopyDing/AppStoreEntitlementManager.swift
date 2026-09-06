@@ -7,7 +7,7 @@ final class AppStoreEntitlementManager: ObservableObject {
     static let shared = AppStoreEntitlementManager()
 
     static let trialProductID = "copyding.trial.14day"
-    static let proProductID = "copyding.pro.lifetime"
+    static let proProductID = "copyding.pro.lifetime.v2"
     static let trialDuration: TimeInterval = 14 * 24 * 60 * 60
 
     enum AccessState: Equatable {
