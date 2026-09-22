@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import CoreGraphics
 import ServiceManagement
 
 enum CopyControlClassifier {
@@ -47,6 +48,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var globalMonitor: Any?
     private var localMonitor: Any?
     private var mouseMonitor: Any?
+#if APP_STORE
+    private var appStoreGlobalMonitor: AppStoreGlobalEventMonitor?
+#endif
     private var permissionTimer: Timer?
     private var clipboardTimer: Timer?
     private var lastAccessibilityState = false
@@ -55,6 +59,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var visualAlertDismissWorkItem: DispatchWorkItem?
     private var visualAlertPanel: NSPanel?
     private var enabled = true
+    private var monitoringAllowed: Bool {
+#if APP_STORE
+        AppStoreEntitlementManager.shared.accessState.canUseCopyDing
+#else
+        true
+#endif
+    }
     private var mouseFailureDetectionEnabled = UserDefaults.standard.bool(
         forKey: "mouseFailureDetectionEnabled"
     )
@@ -101,6 +112,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         keyEquivalent: ""
     )
 
+#if APP_STORE
+    private lazy var accessStatusItem = NSMenuItem(
+        title: "App Store access: Checking…",
+        action: nil,
+        keyEquivalent: ""
+    )
+
+    private lazy var startTrialItem = NSMenuItem(
+        title: "Start 14 Day Trial",
+        action: #selector(startTrial),
+        keyEquivalent: ""
+    )
+
+    private lazy var buyProItem = NSMenuItem(
+        title: "Upgrade to CopyDing Pro",
+        action: #selector(buyPro),
+        keyEquivalent: ""
+    )
+
+    private lazy var restorePurchasesItem = NSMenuItem(
+        title: "Restore Purchases",
+        action: #selector(restorePurchases),
+        keyEquivalent: ""
+    )
+#endif
+
     private lazy var permissionItem = NSMenuItem(
         title: "Accessibility access: Checking…",
         action: #selector(openAccessibilitySettings),
@@ -117,18 +154,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)
         buildMenu()
         lastObservedClipboardChangeCount = pasteboard.changeCount
-        lastAccessibilityState = AXIsProcessTrusted()
+        lastAccessibilityState = currentMonitoringPermissionState()
         startMonitoring()
         startClipboardMonitoring()
         startPermissionPolling()
         updateMenuState()
+#if APP_STORE
+        Task { [weak self] in
+            guard let self else { return }
+            await AppStoreEntitlementManager.shared.prepare()
+            self.updateMenuState()
+            if self.monitoringAllowed {
+                self.requestAccessibilityIfNeeded()
+                self.startMonitoring()
+                self.startClipboardMonitoring()
+            }
+        }
+#else
         requestAccessibilityIfNeeded()
+#endif
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         if let globalMonitor { NSEvent.removeMonitor(globalMonitor) }
         if let localMonitor { NSEvent.removeMonitor(localMonitor) }
         if let mouseMonitor { NSEvent.removeMonitor(mouseMonitor) }
+#if APP_STORE
+        appStoreGlobalMonitor?.stop()
+        appStoreGlobalMonitor = nil
+#endif
         permissionTimer?.invalidate()
         clipboardTimer?.invalidate()
         visualAlertDismissWorkItem?.cancel()
@@ -148,6 +202,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         enabledItem.target = self
         mouseFailureItem.target = self
         visualFailureItem.target = self
+#if APP_STORE
+        startTrialItem.target = self
+        buyProItem.target = self
+        restorePurchasesItem.target = self
+        accessStatusItem.isEnabled = false
+#endif
         permissionItem.target = self
         loginItem.target = self
 
@@ -157,6 +217,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(mouseFailureItem)
         visualFailureItem.toolTip = "Shows a small Copy failed alert beside the pointer"
         menu.addItem(visualFailureItem)
+
+#if APP_STORE
+        menu.addItem(.separator())
+        menu.addItem(accessStatusItem)
+        menu.addItem(startTrialItem)
+        menu.addItem(buyProItem)
+        menu.addItem(restorePurchasesItem)
+        menu.addItem(.separator())
+#endif
 
         let sensitivityItem = NSMenuItem(title: "Alert Timing", action: nil, keyEquivalent: "")
         let sensitivityMenu = NSMenu(title: "Alert Timing")
@@ -229,6 +298,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func startMonitoring() {
+#if APP_STORE
+        appStoreGlobalMonitor?.stop()
+        appStoreGlobalMonitor = nil
+        guard monitoringAllowed else { return }
+
+        let monitor = AppStoreGlobalEventMonitor { [weak self] event in
+            guard let self else { return }
+            switch event {
+            case .commandC:
+                guard self.enabled else { return }
+                self.scheduleFailureCheck(
+                    startingAt: self.pasteboard.changeCount,
+                    source: .keyboard
+                )
+            case .leftMouseDown(let location):
+                self.handleMouseDown(at: location)
+            }
+        }
+        appStoreGlobalMonitor = monitor
+        if !monitor.start(includeMouse: mouseFailureDetectionEnabled) {
+            _ = monitor.requestInputMonitoringAccess()
+        }
+#else
         if let globalMonitor { NSEvent.removeMonitor(globalMonitor) }
         if let localMonitor { NSEvent.removeMonitor(localMonitor) }
         if let mouseMonitor { NSEvent.removeMonitor(mouseMonitor) }
@@ -249,13 +341,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             mouseMonitor = nil
         }
+#endif
     }
 
     private func startPermissionPolling() {
         permissionTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
-                let isTrusted = AXIsProcessTrusted()
+                let isTrusted = self.currentMonitoringPermissionState()
                 if isTrusted != self.lastAccessibilityState {
                     self.lastAccessibilityState = isTrusted
                     if isTrusted { self.startMonitoring() }
@@ -265,12 +358,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func currentMonitoringPermissionState() -> Bool {
+#if APP_STORE
+        CGPreflightListenEventAccess()
+#else
+        AXIsProcessTrusted()
+#endif
+    }
+
     private func startClipboardMonitoring() {
         clipboardTimer?.invalidate()
         clipboardTimer = nil
         lastObservedClipboardChangeCount = pasteboard.changeCount
 
-        guard successSoundMode == .anyClipboardChange else { return }
+        guard monitoringAllowed, successSoundMode == .anyClipboardChange else { return }
 
         let timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.checkForAnyClipboardChange() }
@@ -280,6 +381,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func checkForAnyClipboardChange() {
+        guard monitoringAllowed else { return }
         let currentChangeCount = pasteboard.changeCount
         guard currentChangeCount != lastObservedClipboardChangeCount else { return }
 
@@ -290,7 +392,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func handleKeyDown(_ event: NSEvent) {
-        guard enabled, !event.isARepeat, event.keyCode == 8 else { return }
+        guard enabled, monitoringAllowed, !event.isARepeat, event.keyCode == 8 else { return }
 
         let relevant = event.modifierFlags.intersection([.command, .shift, .control, .option])
         guard relevant == .command else { return }
@@ -299,10 +401,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func handleMouseDown(_ event: NSEvent) {
-        guard enabled, mouseFailureDetectionEnabled, let mouseEvent = event.cgEvent else { return }
+        guard let mouseEvent = event.cgEvent else { return }
+        handleMouseDown(at: mouseEvent.location)
+    }
+
+    private func handleMouseDown(at point: CGPoint) {
+        guard enabled, monitoringAllowed, mouseFailureDetectionEnabled else { return }
 
         let oldChangeCount = pasteboard.changeCount
-        guard isCopyControl(at: mouseEvent.location) else { return }
+        guard isCopyControl(at: point) else { return }
 
         scheduleFailureCheck(startingAt: oldChangeCount, source: .mouse)
     }
@@ -311,7 +418,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pendingCheck?.cancel()
 
         let check = DispatchWorkItem { [weak self] in
-            guard let self, self.enabled else { return }
+            guard let self, self.enabled, self.monitoringAllowed else { return }
             let copySucceeded = self.pasteboard.changeCount != oldChangeCount
             if !copySucceeded {
                 NSSound.beep()
@@ -466,20 +573,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func requestAccessibilityIfNeeded() {
+#if APP_STORE
+        guard monitoringAllowed, !CGPreflightListenEventAccess() else { return }
+        _ = CGRequestListenEventAccess()
+#else
         guard !AXIsProcessTrusted() else { return }
 
         let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
         AXIsProcessTrustedWithOptions(options)
+#endif
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
             self?.updateMenuState()
+            self?.startMonitoring()
         }
     }
 
     private func updateMenuState() {
         enabledItem.state = enabled ? .on : .off
+        enabledItem.isEnabled = monitoringAllowed
         mouseFailureItem.state = mouseFailureDetectionEnabled ? .on : .off
+        mouseFailureItem.isEnabled = monitoringAllowed
         visualFailureItem.state = visualFailureAlertEnabled ? .on : .off
+
+#if APP_STORE
+        let accessState = AppStoreEntitlementManager.shared.accessState
+        startTrialItem.isHidden = true
+        buyProItem.isHidden = false
+        startTrialItem.isEnabled = false
+        buyProItem.isEnabled = false
+        restorePurchasesItem.isEnabled = accessState != .loading
+
+        switch accessState {
+        case .loading:
+            accessStatusItem.title = "App Store access: Checking…"
+        case .trialNotStarted:
+            accessStatusItem.title = "Trial not started"
+            startTrialItem.isHidden = false
+            startTrialItem.isEnabled = true
+            buyProItem.isEnabled = AppStoreEntitlementManager.shared.proProduct != nil
+        case .trialActive(let daysRemaining):
+            let suffix = daysRemaining == 1 ? "day" : "days"
+            accessStatusItem.title = "Trial: \(daysRemaining) \(suffix) remaining"
+            buyProItem.isEnabled = AppStoreEntitlementManager.shared.proProduct != nil
+        case .trialExpired:
+            accessStatusItem.title = "Trial expired"
+            buyProItem.isEnabled = AppStoreEntitlementManager.shared.proProduct != nil
+        case .pro:
+            accessStatusItem.title = "CopyDing Pro: Active"
+            buyProItem.isHidden = true
+        }
+#endif
         if let items = statusItem.menu?.item(withTitle: "Alert Timing")?.submenu?.items {
             for item in items {
                 guard let value = (item.representedObject as? NSNumber)?.doubleValue else { continue }
@@ -492,9 +636,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 item.state = rawValue == successSoundMode.rawValue ? .on : .off
             }
         }
-        permissionItem.title = AXIsProcessTrusted()
+#if APP_STORE
+        permissionItem.title = currentMonitoringPermissionState()
+            ? "Input Monitoring access: Allowed"
+            : "Input Monitoring access: Required…"
+#else
+        permissionItem.title = currentMonitoringPermissionState()
             ? "Accessibility access: Allowed"
             : "Accessibility access: Required…"
+#endif
 
         if #available(macOS 13.0, *) {
             loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
@@ -504,6 +654,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func toggleEnabled() {
+        guard monitoringAllowed else { return }
         enabled.toggle()
         pendingCheck?.cancel()
         updateMenuState()
@@ -554,6 +705,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         showVisualFailureAlert()
     }
 
+#if APP_STORE
+    @objc private func startTrial() {
+        Task { [weak self] in
+            guard let self else { return }
+            let succeeded = await AppStoreEntitlementManager.shared.startTrial()
+            self.updateMenuState()
+            if succeeded {
+                self.requestAccessibilityIfNeeded()
+                self.startMonitoring()
+                self.startClipboardMonitoring()
+            } else if let message = AppStoreEntitlementManager.shared.lastErrorMessage {
+                self.showAlert(title: "Couldn’t start trial", message: message)
+            }
+        }
+    }
+
+    @objc private func buyPro() {
+        Task { [weak self] in
+            guard let self else { return }
+            let succeeded = await AppStoreEntitlementManager.shared.buyPro()
+            self.updateMenuState()
+            if succeeded {
+                self.requestAccessibilityIfNeeded()
+                self.startMonitoring()
+                self.startClipboardMonitoring()
+            } else if let message = AppStoreEntitlementManager.shared.lastErrorMessage {
+                self.showAlert(title: "Purchase unavailable", message: message)
+            }
+        }
+    }
+
+    @objc private func restorePurchases() {
+        Task { [weak self] in
+            guard let self else { return }
+            await AppStoreEntitlementManager.shared.restorePurchases()
+            self.updateMenuState()
+            if self.monitoringAllowed {
+                self.requestAccessibilityIfNeeded()
+                self.startMonitoring()
+                self.startClipboardMonitoring()
+            } else if let message = AppStoreEntitlementManager.shared.lastErrorMessage {
+                self.showAlert(title: "Couldn’t restore purchases", message: message)
+            }
+        }
+    }
+#endif
+
     @objc private func showAbout() {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unknown"
 
@@ -567,9 +765,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func openAccessibilitySettings() {
-        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") else {
-            return
-        }
+#if APP_STORE
+        let settingsURL = "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"
+#else
+        let settingsURL = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+#endif
+        guard let url = URL(string: settingsURL) else { return }
         NSWorkspace.shared.open(url)
     }
 
