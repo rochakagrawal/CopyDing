@@ -1,5 +1,5 @@
 name: Upload CopyDing to App Store Connect
-# Retry marker: Swift 6 monitor cleanup fixed
+# Retry marker: App Store category fixed
 
 on:
   workflow_dispatch:
