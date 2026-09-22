@@ -90,7 +90,18 @@ jobs:
           test "$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist")" = "$APPLE_VERSION"
           test "$(plutil -extract CFBundleVersion raw "$APP/Contents/Info.plist")" = "$APPLE_BUILD"
           codesign -d --entitlements :- "$APP" > "$RUNNER_TEMP/copyding-entitlements.plist"
-          test "$(plutil -extract com.apple.security.app-sandbox raw "$RUNNER_TEMP/copyding-entitlements.plist")" = "true"
+          python - <<'PY'
+          import os
+          import plistlib
+          from pathlib import Path
+
+          path = Path(os.environ["RUNNER_TEMP"]) / "copyding-entitlements.plist"
+          with path.open("rb") as entitlement_file:
+              entitlements = plistlib.load(entitlement_file)
+          if entitlements.get("com.apple.security.app-sandbox") is not True:
+              raise SystemExit("App Sandbox entitlement is missing from the archived app")
+          print("Verified App Sandbox entitlement")
+          PY
 
       - name: Confirm Apple branch is unchanged
         run: |
