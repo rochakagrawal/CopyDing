@@ -1,0 +1,115 @@
+name: Upload CopyDing to App Store Connect
+
+on:
+  workflow_dispatch:
+    inputs:
+      apple_version:
+        description: "Mac App Store version"
+        required: true
+        default: "1.3.2"
+      apple_build:
+        description: "Mac App Store build number"
+        required: true
+        default: "8"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/upload-copyding-app-store.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  upload:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.head_commit.message == 'Enable initial CopyDing App Store upload' }}
+    runs-on: macos-latest
+    env:
+      APPLE_VERSION: ${{ inputs.apple_version || '1.3.2' }}
+      APPLE_BUILD: ${{ inputs.apple_build || '8' }}
+      SOURCE_BRANCH: CopyDing-Apple
+      APPLE_KEY_ID: ${{ secrets.APPLE_KEY_ID }}
+      APPLE_ISSUER_ID: ${{ secrets.APPLE_ISSUER_ID }}
+
+    steps:
+      - name: Check out App Store source
+        uses: actions/checkout@v5
+        with:
+          ref: CopyDing-Apple
+          fetch-depth: 0
+
+      - name: Record and verify App Store source
+        run: |
+          set -euo pipefail
+          echo "SOURCE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          test -f CopyDing.xcodeproj/project.pbxproj
+          test -f CopyDing.xcodeproj/xcshareddata/xcschemes/CopyDing.xcscheme
+          test -f AppStore/CopyDing-AppStore.entitlements
+          test -f AppStore/UploadOptions.plist
+          grep -q 'title: "Test Visual Alert"' Sources/CopyDing/main.swift
+          grep -q 'copyding.pro.lifetime.v2' Sources/CopyDing/AppStoreEntitlementManager.swift
+          echo "Building CopyDing App Store source $(git rev-parse --short HEAD)"
+
+      - name: Verify Xcode project
+        run: |
+          set -euo pipefail
+          xcodebuild -list -project CopyDing.xcodeproj
+          xcodebuild build             -project CopyDing.xcodeproj             -scheme CopyDing             -configuration Release             -destination "platform=macOS"             CODE_SIGNING_ALLOWED=NO             MARKETING_VERSION="$APPLE_VERSION"             CURRENT_PROJECT_VERSION="$APPLE_BUILD"
+
+      - name: Prepare App Store Connect authentication
+        env:
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${APPLE_API_PRIVATE_KEY:-}" || -z "${APPLE_KEY_ID:-}" || -z "${APPLE_ISSUER_ID:-}" ]]; then
+            echo "Missing APPLE_API_PRIVATE_KEY, APPLE_KEY_ID or APPLE_ISSUER_ID GitHub secret."
+            exit 1
+          fi
+
+          KEY_DIR="$RUNNER_TEMP/appstoreconnect/private_keys"
+          mkdir -p "$KEY_DIR"
+          KEY_PATH="$KEY_DIR/AuthKey_$APPLE_KEY_ID.p8"
+          printf '%s' "$APPLE_API_PRIVATE_KEY" | sed 's/\\n/\n/g' > "$KEY_PATH"
+          chmod 600 "$KEY_PATH"
+
+          echo "APPLE_KEY_PATH=$KEY_PATH" >> "$GITHUB_ENV"
+          echo "ARCHIVE_PATH=$RUNNER_TEMP/CopyDing.xcarchive" >> "$GITHUB_ENV"
+
+      - name: Archive signed Mac App Store app
+        run: |
+          set -euo pipefail
+          xcodebuild archive             -project CopyDing.xcodeproj             -scheme CopyDing             -configuration Release             -destination "generic/platform=macOS"             -archivePath "$ARCHIVE_PATH"             -allowProvisioningUpdates             -authenticationKeyPath "$APPLE_KEY_PATH"             -authenticationKeyID "$APPLE_KEY_ID"             -authenticationKeyIssuerID "$APPLE_ISSUER_ID"             MARKETING_VERSION="$APPLE_VERSION"             CURRENT_PROJECT_VERSION="$APPLE_BUILD"
+
+      - name: Verify archived app
+        run: |
+          set -euo pipefail
+          APP="$ARCHIVE_PATH/Products/Applications/CopyDing.app"
+          test -d "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          test "$(plutil -extract CFBundleIdentifier raw "$APP/Contents/Info.plist")" = "com.copyding.utility"
+          test "$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist")" = "$APPLE_VERSION"
+          test "$(plutil -extract CFBundleVersion raw "$APP/Contents/Info.plist")" = "$APPLE_BUILD"
+          codesign -d --entitlements :- "$APP" > "$RUNNER_TEMP/copyding-entitlements.plist"
+          test "$(plutil -extract com.apple.security.app-sandbox raw "$RUNNER_TEMP/copyding-entitlements.plist")" = "true"
+
+      - name: Confirm Apple branch is unchanged
+        run: |
+          set -euo pipefail
+          REMOTE_SHA=$(git ls-remote origin "refs/heads/$SOURCE_BRANCH" | awk '{print $1}')
+          if [[ "$REMOTE_SHA" != "$SOURCE_SHA" ]]; then
+            echo "CopyDing-Apple advanced while this build was running."
+            echo "Built: $SOURCE_SHA"
+            echo "Current: $REMOTE_SHA"
+            exit 1
+          fi
+
+      - name: Upload build to App Store Connect
+        run: |
+          set -euo pipefail
+          xcodebuild -exportArchive             -archivePath "$ARCHIVE_PATH"             -exportPath "$RUNNER_TEMP/CopyDingUpload"             -exportOptionsPlist AppStore/UploadOptions.plist             -allowProvisioningUpdates             -authenticationKeyPath "$APPLE_KEY_PATH"             -authenticationKeyID "$APPLE_KEY_ID"             -authenticationKeyIssuerID "$APPLE_ISSUER_ID"
+
+          echo "Build $APPLE_VERSION ($APPLE_BUILD) uploaded to App Store Connect."
+          echo "This workflow does not submit the app for App Review."
+
+      - name: Remove App Store Connect private key
+        if: ${{ always() }}
+        run: rm -f "${APPLE_KEY_PATH:-}"
