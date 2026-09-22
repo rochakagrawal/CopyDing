@@ -1,9 +1,9 @@
 {
-  "status": "failure",
-  "run_id": 35737321179,
-  "run_url": "https://github.com/rochakagrawal/CopyDing/actions/runs/35737321179",
+  "status": "success",
+  "run_id": 35737780057,
+  "run_url": "https://github.com/rochakagrawal/CopyDing/actions/runs/35737780057",
   "source_branch": "CopyDing-Apple",
-  "source_sha": "f809c81eb910e1c16d07f5a124baaad20c39390e",
+  "source_sha": "efb440b874aa8be052c823fab9ff18c7a2153c8c",
   "version": "1.3.2",
   "build": "9"
 }
