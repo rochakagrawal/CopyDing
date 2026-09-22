@@ -202,6 +202,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         testItem.target = self
         menu.addItem(testItem)
 
+        let testVisualAlertItem = NSMenuItem(
+            title: "Test Visual Alert",
+            action: #selector(testVisualAlert),
+            keyEquivalent: ""
+        )
+        testVisualAlertItem.target = self
+        menu.addItem(testVisualAlertItem)
+
         let aboutItem = NSMenuItem(
             title: "About CopyDing",
             action: #selector(showAbout),
@@ -540,6 +548,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func testDing() {
         NSSound.beep()
+    }
+
+    @objc private func testVisualAlert() {
+        showVisualFailureAlert()
     }
 
     @objc private func showAbout() {
