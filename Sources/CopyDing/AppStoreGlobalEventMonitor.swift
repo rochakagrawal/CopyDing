@@ -92,13 +92,5 @@ final class AppStoreGlobalEventMonitor {
         }
     }
 
-    deinit {
-        if let source = runLoopSource {
-            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
-        }
-        if let eventTap {
-            CGEvent.tapEnable(tap: eventTap, enable: false)
-        }
-    }
 }
 #endif
