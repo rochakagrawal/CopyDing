@@ -11,7 +11,7 @@ on:
       apple_build:
         description: "Mac App Store build number"
         required: true
-        default: "8"
+        default: "9"
   push:
     branches: [main]
     paths:
@@ -26,7 +26,7 @@ jobs:
     runs-on: macos-latest
     env:
       APPLE_VERSION: ${{ inputs.apple_version || '1.3.2' }}
-      APPLE_BUILD: ${{ inputs.apple_build || '8' }}
+      APPLE_BUILD: ${{ inputs.apple_build || '9' }}
       SOURCE_BRANCH: CopyDing-Apple
       APPLE_KEY_ID: ${{ secrets.APPLE_KEY_ID }}
       APPLE_ISSUER_ID: ${{ secrets.APPLE_ISSUER_ID }}
