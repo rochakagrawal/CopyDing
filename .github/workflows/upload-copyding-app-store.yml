@@ -17,7 +17,7 @@ on:
       - ".github/workflows/upload-copyding-app-store.yml"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   upload:
@@ -113,3 +113,36 @@ jobs:
       - name: Remove App Store Connect private key
         if: ${{ always() }}
         run: rm -f "${APPLE_KEY_PATH:-}"
+
+      - name: Record upload workflow result
+        if: ${{ always() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_STATUS: ${{ job.status }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          STATUS_PATH=".github/copyding-app-store-upload-status.json"
+          python - <<'PY' > "$RUNNER_TEMP/status.json"
+          import json
+          import os
+          print(json.dumps({
+              "status": os.environ["JOB_STATUS"],
+              "run_id": int(os.environ["RUN_ID"]),
+              "run_url": os.environ["RUN_URL"],
+              "source_branch": os.environ["SOURCE_BRANCH"],
+              "source_sha": os.environ.get("SOURCE_SHA", ""),
+              "version": os.environ["APPLE_VERSION"],
+              "build": os.environ["APPLE_BUILD"]
+          }, indent=2))
+          PY
+
+          CONTENT=$(base64 < "$RUNNER_TEMP/status.json" | tr -d '\n')
+          EXISTING_SHA=$(gh api "repos/$GITHUB_REPOSITORY/contents/$STATUS_PATH?ref=main" --jq .sha 2>/dev/null || true)
+
+          if [[ -n "$EXISTING_SHA" ]]; then
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$STATUS_PATH"               -f message="Record CopyDing App Store upload result"               -f content="$CONTENT"               -f branch="main"               -f sha="$EXISTING_SHA" >/dev/null
+          else
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$STATUS_PATH"               -f message="Record CopyDing App Store upload result"               -f content="$CONTENT"               -f branch="main" >/dev/null
+          fi
