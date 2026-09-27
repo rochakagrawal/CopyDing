@@ -10,24 +10,32 @@ final class CopyControlClassifierTests: XCTestCase {
         ))
     }
 
-    func testRecognisesMenuItemKeyboardEquivalent() {
-        XCTAssertTrue(CopyControlClassifier.isCopyControl(
+    func testRejectsMenuItemKeyboardEquivalentWithoutCopyLabel() {
+        XCTAssertFalse(CopyControlClassifier.isCopyControl(
             role: "AXMenuItem",
             commandCharacter: "C",
             labels: []
         ))
     }
 
-    func testRecognisesLabelledCopyButtons() {
+    func testRecognisesContextMenuCopyItems() {
         XCTAssertTrue(CopyControlClassifier.isCopyControl(
-            role: "AXButton",
+            role: "AXMenuItem",
             commandCharacter: nil,
             labels: ["Copy link"]
         ))
         XCTAssertTrue(CopyControlClassifier.isCopyControl(
+            role: "AXMenuItem",
+            commandCharacter: nil,
+            labels: ["Copy to Clipboard"]
+        ))
+    }
+
+    func testRejectsCopyLabeledButtonOutsideContextMenu() {
+        XCTAssertFalse(CopyControlClassifier.isCopyControl(
             role: "AXButton",
             commandCharacter: nil,
-            labels: ["copyToClipboardButton"]
+            labels: ["Copy"]
         ))
     }
 
@@ -56,3 +64,54 @@ final class CopyControlClassifierTests: XCTestCase {
         )
     }
 }
+
+#if APP_STORE
+@MainActor
+final class AppStoreEntitlementTests: XCTestCase {
+    func testAccessStartsWithoutTrialOrPro() {
+        XCTAssertEqual(
+            AppStoreEntitlementManager.accessState(
+                hasPro: false,
+                trialPurchaseDate: nil,
+                now: Date()
+            ),
+            .trialNotStarted
+        )
+    }
+
+    func testAccessIsActiveForVerifiedTrialDate() {
+        let purchaseDate = Date(timeIntervalSince1970: 1_000_000)
+        XCTAssertEqual(
+            AppStoreEntitlementManager.accessState(
+                hasPro: false,
+                trialPurchaseDate: purchaseDate,
+                now: purchaseDate.addingTimeInterval(3 * 24 * 60 * 60)
+            ),
+            .trialActive(daysRemaining: 11)
+        )
+    }
+
+    func testAccessExpiresAfterFourteenDays() {
+        let purchaseDate = Date(timeIntervalSince1970: 1_000_000)
+        XCTAssertEqual(
+            AppStoreEntitlementManager.accessState(
+                hasPro: false,
+                trialPurchaseDate: purchaseDate,
+                now: purchaseDate.addingTimeInterval(AppStoreEntitlementManager.trialDuration)
+            ),
+            .trialExpired
+        )
+    }
+
+    func testProTakesPriorityOverExpiredTrial() {
+        XCTAssertEqual(
+            AppStoreEntitlementManager.accessState(
+                hasPro: true,
+                trialPurchaseDate: Date.distantPast,
+                now: Date()
+            ),
+            .pro
+        )
+    }
+}
+#endif
