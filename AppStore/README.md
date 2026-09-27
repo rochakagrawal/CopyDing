@@ -131,8 +131,8 @@ xcodebuild build \
   -configuration Release \
   -destination "platform=macOS" \
   CODE_SIGNING_ALLOWED=NO \
-  MARKETING_VERSION="1.3.2" \
-  CURRENT_PROJECT_VERSION="18"
+  MARKETING_VERSION="1.3.3" \
+  CURRENT_PROJECT_VERSION="19"
 ```
 
 The Debug-only menu item `Debug: Simulate Trial Expiry` advances the entitlement evaluator without changing production transaction logic.
