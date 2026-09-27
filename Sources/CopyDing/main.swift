@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import Carbon
 import ServiceManagement
 
 enum CopyControlClassifier {
@@ -107,6 +108,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         keyEquivalent: ""
     )
 
+    /// Secure input is a system-wide kill switch for keyboard observation.
+    /// While any process holds it, macOS withholds every key event from all
+    /// event taps and global monitors, so ⌘C detection silently stops working
+    /// no matter which permissions are granted. Password managers are the
+    /// usual culprit. Surface it so a silent failure is never mistaken for a
+    /// permission problem. This row only reports the state; CopyDing cannot
+    /// release secure input held by another process.
+    private lazy var secureInputItem = NSMenuItem(
+        title: "Secure Input: Checking…",
+        action: nil,
+        keyEquivalent: ""
+    )
+
     private lazy var loginItem = NSMenuItem(
         title: "Launch at Login",
         action: #selector(toggleLaunchAtLogin),
@@ -191,6 +205,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         permissionItem.toolTip = "Click to open Accessibility settings"
         menu.addItem(permissionItem)
+        secureInputItem.toolTip = "If another app enables secure input (usually a password manager), macOS stops delivering key events to every event tap and ⌘C cannot be observed until it is released"
+        menu.addItem(secureInputItem)
         menu.addItem(loginItem)
         menu.addItem(.separator())
 
@@ -495,12 +511,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         permissionItem.title = AXIsProcessTrusted()
             ? "Accessibility access: Allowed"
             : "Accessibility access: Required…"
+        updateSecureInputRow()
 
         if #available(macOS 13.0, *) {
             loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
         } else {
             loginItem.isHidden = true
         }
+    }
+
+    /// Reports whether some process is currently holding Secure Event Input.
+    /// While it is held, macOS delivers no key events to any event tap or global
+    /// monitor, so ⌘C cannot be observed regardless of granted permissions.
+    private func updateSecureInputRow() {
+        let isHeld = IsSecureEventInputEnabled()
+        let title = NSMutableAttributedString(string: "Secure Input: ")
+        title.append(NSAttributedString(
+            string: isHeld ? "ON — ⌘C cannot be observed" : "Off",
+            attributes: [.foregroundColor: isHeld ? NSColor.systemOrange : NSColor.systemGreen]
+        ))
+        secureInputItem.attributedTitle = title
     }
 
     @objc private func toggleEnabled() {
