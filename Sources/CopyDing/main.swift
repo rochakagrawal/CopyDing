@@ -5,12 +5,10 @@ import ServiceManagement
 
 enum CopyControlClassifier {
     static func isCopyControl(role: String, commandCharacter: String?, labels: [String]) -> Bool {
-        guard role == "AXMenuItem" || role == "AXButton" else { return false }
-
-        if role == "AXMenuItem", commandCharacter?.lowercased() == "c" {
-            return true
-        }
-
+        guard role == "AXMenuItem" else { return false }
+        // A keyboard equivalent alone is not enough. Many unrelated menu rows
+        // expose a "C" command character, so require an actual Copy label on
+        // a context-menu item.
         return labels.contains(where: containsCopyLabel)
     }
 
@@ -53,6 +51,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var lastAccessibilityState = false
     private var lastObservedClipboardChangeCount = 0
     private var pendingCheck: DispatchWorkItem?
+    private var pendingCheckID: UInt64 = 0
+    private var pendingContextMenuCopy: (changeCount: Int, timestamp: Date)?
     private var visualAlertDismissWorkItem: DispatchWorkItem?
     private var visualAlertPanel: NSPanel?
     private var enabled = true
@@ -167,7 +167,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let menu = NSMenu()
         menu.addItem(enabledItem)
-        mouseFailureItem.toolTip = "Detects standard Copy menu items and labelled Copy buttons"
+        mouseFailureItem.toolTip = "Detects Copy chosen from a context menu"
         menu.addItem(mouseFailureItem)
         visualFailureItem.toolTip = "Shows a small Copy failed alert beside the pointer"
         menu.addItem(visualFailureItem)
@@ -259,7 +259,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         if mouseFailureDetectionEnabled {
-            mouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+            mouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
                 Task { @MainActor in self?.handleMouseDown(event) }
             }
         } else {
@@ -317,17 +317,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func handleMouseDown(_ event: NSEvent) {
         guard enabled, mouseFailureDetectionEnabled, let mouseEvent = event.cgEvent else { return }
 
-        let oldChangeCount = pasteboard.changeCount
-        guard isCopyControl(at: mouseEvent.location) else { return }
+        switch event.type {
+        case .rightMouseDown:
+            pendingContextMenuCopy = (pasteboard.changeCount, Date())
+        case .leftMouseDown:
+            handleContextMenuCopySelection(at: mouseEvent.location)
+        default:
+            break
+        }
+    }
 
-        scheduleFailureCheck(startingAt: oldChangeCount, source: .mouse)
+    /// Context-menu copies produce no key event, so they are inferred instead of
+    /// observed: a right-click records the clipboard state, and the next click is
+    /// treated as a Copy only when it lands on a real Copy item within a short
+    /// window. Reading that item's label needs Accessibility, so this cannot work
+    /// in a sandboxed build.
+    private func handleContextMenuCopySelection(at location: CGPoint) {
+        if NSApp.isActive {
+            pendingContextMenuCopy = nil
+            return
+        }
+
+        guard let pendingContextMenuCopy else { return }
+        self.pendingContextMenuCopy = nil
+
+        guard Date().timeIntervalSince(pendingContextMenuCopy.timestamp) <= 3 else { return }
+        guard mouseFailureDetectionEnabled else { return }
+        guard AXIsProcessTrusted() else { return }
+        guard isCopyControl(at: location) else { return }
+
+        scheduleFailureCheck(startingAt: pendingContextMenuCopy.changeCount, source: .mouse)
     }
 
     private func scheduleFailureCheck(startingAt oldChangeCount: Int, source: CopyAttemptSource) {
         pendingCheck?.cancel()
+        pendingCheckID &+= 1
+        let checkID = pendingCheckID
 
         let check = DispatchWorkItem { [weak self] in
             guard let self, self.enabled else { return }
+            // A newer check has already superseded this one, so its result is stale.
+            guard self.pendingCheckID == checkID else { return }
+
             let copySucceeded = self.pasteboard.changeCount != oldChangeCount
             if !copySucceeded {
                 NSSound.beep()
@@ -336,6 +367,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             } else if self.successSoundMode == .commandCOnly, source == .keyboard {
                 self.playSuccessSound()
+            }
+            if self.pendingCheckID == checkID {
+                self.pendingCheck = nil
             }
         }
         pendingCheck = check
@@ -412,10 +446,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSAnimationContext.runAnimationGroup({ context in
                 context.duration = 0.18
                 panel.animator().alphaValue = 0
-            }, completionHandler: {
-                panel.orderOut(nil)
-                if self.visualAlertPanel === panel {
-                    self.visualAlertPanel = nil
+            }, completionHandler: { [weak self, weak panel] in
+                Task { @MainActor in
+                    guard let self, let panel else { return }
+                    panel.orderOut(nil)
+                    if self.visualAlertPanel === panel {
+                        self.visualAlertPanel = nil
+                    }
                 }
             })
         }
@@ -436,6 +473,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         guard result == .success, var currentElement = hitElement else { return false }
 
+        if accessibilityElementBelongsToCopyDing(currentElement) {
+            return false
+        }
+
         // Some apps expose an image or text child inside the actual button.
         // Check a few ancestors so properly labelled parent controls are still detected.
         for _ in 0..<4 {
@@ -448,6 +489,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             currentElement = parent
         }
         return false
+    }
+
+    /// CopyDing's own menu contains Copy-labelled rows. Without this check a click
+    /// on one of them would be mistaken for a user copy and fire a false alert.
+    private func accessibilityElementBelongsToCopyDing(_ element: AXUIElement) -> Bool {
+        var processIdentifier: pid_t = 0
+        guard AXUIElementGetPid(element, &processIdentifier) == .success else {
+            return false
+        }
+        return processIdentifier == ProcessInfo.processInfo.processIdentifier
     }
 
     private func accessibilityElementLooksLikeCopyControl(_ element: AXUIElement) -> Bool {

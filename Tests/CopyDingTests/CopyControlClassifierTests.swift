@@ -10,24 +10,32 @@ final class CopyControlClassifierTests: XCTestCase {
         ))
     }
 
-    func testRecognisesMenuItemKeyboardEquivalent() {
-        XCTAssertTrue(CopyControlClassifier.isCopyControl(
+    func testRejectsMenuItemKeyboardEquivalentWithoutCopyLabel() {
+        XCTAssertFalse(CopyControlClassifier.isCopyControl(
             role: "AXMenuItem",
             commandCharacter: "C",
             labels: []
         ))
     }
 
-    func testRecognisesLabelledCopyButtons() {
+    func testRecognisesContextMenuCopyItems() {
         XCTAssertTrue(CopyControlClassifier.isCopyControl(
-            role: "AXButton",
+            role: "AXMenuItem",
             commandCharacter: nil,
             labels: ["Copy link"]
         ))
         XCTAssertTrue(CopyControlClassifier.isCopyControl(
+            role: "AXMenuItem",
+            commandCharacter: nil,
+            labels: ["Copy to Clipboard"]
+        ))
+    }
+
+    func testRejectsCopyLabeledButtonOutsideContextMenu() {
+        XCTAssertFalse(CopyControlClassifier.isCopyControl(
             role: "AXButton",
             commandCharacter: nil,
-            labels: ["copyToClipboardButton"]
+            labels: ["Copy"]
         ))
     }
 
