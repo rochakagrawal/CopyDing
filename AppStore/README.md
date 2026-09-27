@@ -60,6 +60,7 @@ The shipping menu is deliberately short. In `Release` it contains only:
 - `Input Monitoring` status row
 - `Secure Input` status row
 - `Launch at Login`
+- `Test Ding` and `Test Visual Alert`
 - `About CopyDing` and `Quit CopyDing`
 
 Everything developer-facing is compiled out of `Release` and exists only in `Debug`:
@@ -67,7 +68,7 @@ Everything developer-facing is compiled out of `Release` and exists only in `Deb
 - The `Diagnostics` submenu: sixteen counter rows, `Copy Diagnostics Summary`, `Reset Diagnostics Counters`, `Test Failure Pipeline`
 - `Debug: All Features Enabled` and `Debug: Simulate Trial Expiry`
 
-The `Test Ding` and `Test Visual Alert` hooks are Developer ID only, under `#if !APP_STORE`.
+`Test Ding` plays the alert sound and `Test Visual Alert` renders the overlay. Both stay in the shipping build on purpose: they are how you confirm the sound is audible and the alert renders without faking a failed copy.
 
 `diagnosticLog(_:)` writes to OSLog under subsystem `com.copyding.utility` in both configurations. That logging is invisible to customers and stays in `Release` on purpose, because it is what made the secure-input failure diagnosable. Only the menu surface is Debug-only.
 
@@ -131,7 +132,7 @@ xcodebuild build \
   -destination "platform=macOS" \
   CODE_SIGNING_ALLOWED=NO \
   MARKETING_VERSION="1.3.2" \
-  CURRENT_PROJECT_VERSION="17"
+  CURRENT_PROJECT_VERSION="18"
 ```
 
 The Debug-only menu item `Debug: Simulate Trial Expiry` advances the entitlement evaluator without changing production transaction logic.

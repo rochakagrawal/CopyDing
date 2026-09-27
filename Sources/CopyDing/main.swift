@@ -424,9 +424,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(loginItem)
         menu.addItem(.separator())
 
-        // Manual test hooks for the beep and the visual alert. Useful when
-        // working on the Developer ID build, noise in a customer-facing menu.
-        #if !APP_STORE
+        // Manual test hooks. These let you confirm the alert sound is audible and
+        // the visual overlay renders without having to fake a failed copy, so
+        // they ship in both flavours.
         let testItem = NSMenuItem(
             title: "Test Ding",
             action: #selector(testDing),
@@ -441,7 +441,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         testVisualAlertItem.target = self
         menu.addItem(testVisualAlertItem)
-        #endif
 
         let aboutItem = NSMenuItem(
             title: "About CopyDing",
