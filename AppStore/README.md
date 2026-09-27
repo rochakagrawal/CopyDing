@@ -49,19 +49,45 @@ The following features are expected to remain in the App Store build:
 - Launch at Login
 - 14-day trial and lifetime Pro unlock
 
+### What ships in the App Store menu
+
+The shipping menu is deliberately short. In `Release` it contains only:
+
+- CopyDing access status, `Start Free Trial`, `Upgrade to CopyDing Pro`, `Restore Purchases`
+- `Enabled`
+- `Visual Failure Alert`
+- `Alert Timing` and `Success Sound` submenus
+- `Input Monitoring` status row
+- `Secure Input` status row
+- `Launch at Login`
+- `About CopyDing` and `Quit CopyDing`
+
+Everything developer-facing is compiled out of `Release` and exists only in `Debug`:
+
+- The `Diagnostics` submenu: sixteen counter rows, `Copy Diagnostics Summary`, `Reset Diagnostics Counters`, `Test Failure Pipeline`
+- `Debug: All Features Enabled` and `Debug: Simulate Trial Expiry`
+
+The `Test Ding` and `Test Visual Alert` hooks are Developer ID only, under `#if !APP_STORE`.
+
+`diagnosticLog(_:)` writes to OSLog under subsystem `com.copyding.utility` in both configurations. That logging is invisible to customers and stays in `Release` on purpose, because it is what made the secure-input failure diagnosable. Only the menu surface is Debug-only.
+
 ### Mouse copy detection
 
 The App Store build intentionally does not monitor mouse clicks or request Accessibility access. It detects keyboard-driven `Command-C` copy attempts through Input Monitoring only. The direct-download build may retain its separate mouse-copy behavior.
+
+`mouseFailureItem` is declared under `#if !APP_STORE`, so the App Store binary contains no mouse-detection menu entry at all. Mouse-copy detection needs cross-app Accessibility inspection (`AXUIElementCopyElementAtPosition`), which the App Sandbox forbids — it cannot work in this flavour, so it is not shipped in it.
 
 ### Secure input
 
 Secure Event Input is a system-wide kill switch for keyboard observation. While any process holds it, macOS withholds every key event from all event taps and global monitors, so `Command-C` detection silently stops working no matter which permissions are granted. Password managers are the usual culprit.
 
-The menu therefore carries a `Secure Input` row that reports `Off` or `ON — ⌘C cannot be observed`, and the diagnostic summary records the same value. This affects both build flavours, so the row is declared outside the `APP_STORE` conditionals. It is a reporting aid only: the app cannot release secure input held by another process.
+The menu therefore carries a `Secure Input` row that reports `Off` or `ON — ⌘C cannot be observed`. This affects both build flavours, so the row is declared outside the `APP_STORE` conditionals. It is a reporting aid only: the app cannot release secure input held by another process.
 
 ### Accessibility
 
 The App Store flavour contains no Accessibility code at all. `permissionItem`, `openAccessibilitySettings`, `requestAccessibilityIfNeeded`, the `NSEvent` global monitors and the `AXUIElement` inspection chain are all compiled out under `#if !APP_STORE`, so the App Store binary never requests, advertises or depends on Accessibility trust. Only the Developer ID build retains cross-app mouse-copy detection.
+
+Verification is done against the built binary, not the compiler: `nm -u` and `strings` on the `Release` app must report zero references to `AXIsProcessTrusted`, `AXIsProcessTrustedWithOptions`, `AXTrustedCheck*` and `AXUIElement*`.
 
 ## StoreKit states
 
@@ -105,7 +131,7 @@ xcodebuild build \
   -destination "platform=macOS" \
   CODE_SIGNING_ALLOWED=NO \
   MARKETING_VERSION="1.3.2" \
-  CURRENT_PROJECT_VERSION="16"
+  CURRENT_PROJECT_VERSION="17"
 ```
 
 The Debug-only menu item `Debug: Simulate Trial Expiry` advances the entitlement evaluator without changing production transaction logic.

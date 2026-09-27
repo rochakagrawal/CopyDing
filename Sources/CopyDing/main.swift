@@ -147,11 +147,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         keyEquivalent: ""
     )
 
+    // Mouse-copy detection needs cross-app Accessibility inspection, which the
+    // App Sandbox forbids. It is therefore a Developer ID build feature only and
+    // is compiled out of the App Store flavour entirely.
+    #if !APP_STORE
     private lazy var mouseFailureItem = NSMenuItem(
         title: "Alert for Mouse Copy Failures",
         action: #selector(toggleMouseFailureDetection),
         keyEquivalent: ""
     )
+    #endif
 
     private lazy var visualFailureItem = NSMenuItem(
         title: "Visual Failure Alert",
@@ -201,6 +206,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         action: #selector(openInputMonitoringSettings),
         keyEquivalent: ""
     )
+    // Diagnostics and the other developer affordances are Debug-only. They were
+    // invaluable while tracking down why ⌘C stopped being observed, but a
+    // shipping App Store build must not expose sixteen counter rows, a
+    // clipboard-dumping summary or pipeline test hooks to customers.
+    #if DEBUG
     private lazy var diagnosticsRootItem = NSMenuItem(
         title: "Diagnostics",
         action: nil,
@@ -226,7 +236,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         action: #selector(testFailurePipeline),
         keyEquivalent: ""
     )
-    #if DEBUG
     private lazy var debugAllFeaturesItem = NSMenuItem(
         title: "Debug: All Features Enabled",
         action: #selector(toggleDebugAllFeatures),
@@ -318,8 +327,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         enabledItem.target = self
-        mouseFailureItem.target = self
         #if !APP_STORE
+        mouseFailureItem.target = self
         permissionItem.target = self
         #endif
         visualFailureItem.target = self
@@ -329,10 +338,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         startTrialItem.target = self
         upgradeItem.target = self
         restorePurchasesItem.target = self
+        #if DEBUG
         copyDiagnosticsItem.target = self
         resetDiagnosticsItem.target = self
         testFailurePipelineItem.target = self
-        #if DEBUG
         debugAllFeaturesItem.target = self
         debugTrialExpiryItem.target = self
         #endif
@@ -394,6 +403,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         inputMonitoringItem.target = self
         inputMonitoringItem.toolTip = "Required to observe ⌘C without changing the event"
         menu.addItem(inputMonitoringItem)
+        #if DEBUG
         let diagnosticsMenu = NSMenu(title: "Diagnostics")
         for item in diagnosticsStatusItems {
             diagnosticsMenu.addItem(item)
@@ -404,6 +414,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         diagnosticsMenu.addItem(testFailurePipelineItem)
         diagnosticsRootItem.submenu = diagnosticsMenu
         menu.addItem(diagnosticsRootItem)
+        #endif
         #else
         permissionItem.toolTip = "Click to open Accessibility settings"
         menu.addItem(permissionItem)
@@ -413,6 +424,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(loginItem)
         menu.addItem(.separator())
 
+        // Manual test hooks for the beep and the visual alert. Useful when
+        // working on the Developer ID build, noise in a customer-facing menu.
+        #if !APP_STORE
         let testItem = NSMenuItem(
             title: "Test Ding",
             action: #selector(testDing),
@@ -427,6 +441,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         testVisualAlertItem.target = self
         menu.addItem(testVisualAlertItem)
+        #endif
 
         let aboutItem = NSMenuItem(
             title: "About CopyDing",
@@ -1094,7 +1109,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             loginItem.isHidden = true
         }
-        #if APP_STORE
+        #if APP_STORE && DEBUG
         refreshDiagnosticsMenu()
         #endif
     }
@@ -1118,7 +1133,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             diagnostics.lastCommandCAt = Date()
         }
         diagnosticLog("Key event observed. \(diagnostics.lastKeyEventSummary)")
+        #if DEBUG
         refreshDiagnosticsMenu()
+        #endif
     }
 
     private func keyEventSummary(_ event: AppStoreGlobalKeyEvent) -> String {
@@ -1130,6 +1147,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSLog("[CopyDing Diagnostics] \(message)")
     }
 
+    #if DEBUG
     private func refreshDiagnosticsMenu() {
         let lines = compactDiagnosticsLines()
         for (index, item) in diagnosticsStatusItems.enumerated() {
@@ -1243,6 +1261,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     #endif
 
+    #endif
+
     private func setPermissionTitle(
         _ item: NSMenuItem,
         prefix: String,
@@ -1322,6 +1342,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     #if APP_STORE
+    #if DEBUG
     @objc private func copyDiagnosticsSummary() {
         diagnostics.copiedDiagnosticsAt = Date()
         let summary = diagnosticSummary()
@@ -1349,6 +1370,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         scheduleFailureCheck(startingAt: pasteboard.changeCount, source: .keyboard)
         updateMenuState()
     }
+    #endif
 
     private func proProductTitle() -> String {
         if let displayPrice = entitlementManager.proProduct?.displayPrice {
